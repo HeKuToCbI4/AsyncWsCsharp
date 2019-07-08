@@ -8,6 +8,8 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
+using WebAPI_1;
+using ProtoBuf;
 
 namespace AsyncWsClient
 {
@@ -30,36 +32,100 @@ namespace AsyncWsClient
       public Task Connect()
       {
          Console.WriteLine("Connecting!");
-         return _clientWebSocket.ConnectAsync(_URL, CancellationToken.None);
+         return Task.Run(()=>_clientWebSocket.ConnectAsync(_URL, CancellationToken.None));
       }
-      
+
       public const int NotFound = -1;
+
       public static int GetPositionOfLastByteWithData(byte[] array)
       {
          for (int i = array.Length - 1; i > -1; i--)
          {
-            if (array[i] > 0) { return i; }
+            if (array[i] > 0)
+            {
+               return i;
+            }
          }
+
          return NotFound;
-      }  
+      }
+
+      public String GetCloseDescription()
+      {
+         return _clientWebSocket.CloseStatusDescription;
+      }
       
-      public String? RecvData()
+      public ServerMsg RecvData()
       {
          var buf = new ArraySegment<byte>(new byte[4096]);
-         Task.Run(() => _clientWebSocket.ReceiveAsync(buf, CancellationToken.None));
+         _clientWebSocket.ReceiveAsync(buf, CancellationToken.None).Wait();
          var lastByte = GetPositionOfLastByteWithData(buf.Array);
          if (lastByte != -1)
          {
-            return System.Text.Encoding.Unicode.GetString(buf.Slice(0,lastByte));
+            var slicedBuf = buf.Array.Take(lastByte+1).ToArray();
+            return ProtoDeserialize<ServerMsg>(slicedBuf);
          }
 
          return null;
       }
-      
+
+      private static byte[] ProtoSerialize<T>
+         (T record) where T : class
+      {
+         if (null == record) return null;
+         try
+         {
+            using (var stream = new MemoryStream())
+            {
+               Serializer.Serialize(stream, record);
+               return stream.ToArray();
+            }
+         }
+         catch (Exception e)
+         {
+            Console.WriteLine(e);
+            throw;
+         }
+      }
+
+      public Boolean GetConnectionStatus()
+      {
+         return _clientWebSocket.State == WebSocketState.Open;
+      }
+
+      public static T ProtoDeserialize<T>(byte[] data) where T : class
+      {
+         if (null == data) return null;
+
+         try
+         {
+            Console.WriteLine(data.Length);
+            using (var stream = new MemoryStream(data, 0, data.Length))
+            {
+               return Serializer.Deserialize<T>(stream);
+            }
+         }
+         catch
+         {
+            // Log error
+            throw;
+         }
+      }
+
+      public Task Logon()
+      {
+         var LogonMessage = new ClientMsg();
+         LogonMessage.logon = new Logon();
+         LogonMessage.logon.user_name = "WebTrader";
+         LogonMessage.logon.password = "WebTrader";
+         return Task.Run(()=>_clientWebSocket.SendAsync(new ArraySegment<byte>(ProtoSerialize(LogonMessage)),
+            WebSocketMessageType.Binary, true, CancellationToken.None));
+      }
+
       public Task Disconnect()
       {
-         return _clientWebSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Success disconnect...",
-            CancellationToken.None);
+         return Task.Run(()=>_clientWebSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Success disconnect...",
+            CancellationToken.None));
       }
    }
 }
